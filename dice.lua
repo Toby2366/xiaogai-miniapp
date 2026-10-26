@@ -1,7 +1,11 @@
--- 小白掷骰子小应用 v2（含统计）
--- 单击功能键 = 掷骰子；双击 = 切换「掷骰 / 统计」视图；长按 3 秒 = 退出小应用。
--- 统计：本次进入小应用以来，点数 1~6 各自出现的次数（柱状图展示）。
--- 纯矩形 + 文字绘制，无图片接口；接口见 docs/miniapp.md。
+-- 小白掷骰子小应用 v4（统计常驻版，修正坐标与文本数量约束）
+-- 单击功能键 = 掷骰子；长按 3 秒 = 退出小应用（系统级）。
+-- 统计：本次进入小应用以来，点数 1~6 各自出现次数，常驻画面底部柱状图。
+-- 小应用按钮只有「单击」回调，双击/三击是系统保留行为，不能用。
+-- 纯矩形 + 文字绘制，无图片接口。
+-- 硬约束：屏幕 240x240；screen.text 的 y ∈ [0,224]（240-16px字体）；
+--        一帧最多 8 段文字(MINIAPP_MAX_TEXTS)、最多 128 个矩形；
+--        screen.rect 的 x/y ∈ [0,239]，x+w<=240，y+h<=240。
 
 local W, H = 240, 240
 
@@ -16,9 +20,9 @@ local BAR      = 0x4A6FA5
 local BAR_HI   = 0xF4C64A
 local BASELINE = 0x3A4A66
 
-local SIZE   = 122
-local BASE_X = 59
-local BASE_Y = 63
+local SIZE   = 96
+local BASE_X = 72
+local BASE_Y = 18
 
 local PIPS = {
   { {2,2} },
@@ -29,7 +33,6 @@ local PIPS = {
   { {1,1},{2,1},{3,1},{1,3},{2,3},{3,3} },
 }
 
-local view  = "roll"  -- "roll" | "stats"
 local state = "idle"  -- "idle" | "rolling"
 local value  = 1
 local target = 1
@@ -41,11 +44,6 @@ local dx, dy = 0, 0
 
 local counts = { 0, 0, 0, 0, 0, 0 }
 local total  = 0
-
--- 双击判定
-local click_pending = false
-local click_ms = 0
-local DOUBLE_MS = 320
 
 local rng = 1
 local function rnd()
@@ -61,20 +59,21 @@ local function beep(hz, ms)
   if buzzer ~= nil then buzzer.play(hz, ms) end
 end
 
-local function draw_roll()
+local function draw_bg()
   local bgs = { 0x23324F, 0x1F2C46, 0x1B263D, 0x172134, 0x131C2B, 0x0F1722 }
   for i = 1, 6 do
     screen.rect(0, (i - 1) * 40, W, 40, bgs[i])
   end
-  screen.text("掷骰子", 96, 14, TITLE)
+end
 
+local function draw_dice()
   local sx = BASE_X + dx
   local sy = BASE_Y + dy
   screen.rect(sx + 4, sy + 4, SIZE + 4, SIZE + 4, SHADOW)
   screen.rect(sx - 3, sy - 3, SIZE + 6, SIZE + 6, BORDER)
   screen.rect(sx, sy, SIZE, SIZE, WHITE)
 
-  local p = 20
+  local p = 18
   local layout = PIPS[value]
   for i, rc in ipairs(layout) do
     local cx = sx + math.floor((rc[2] * 2 - 1) * SIZE / 6)
@@ -87,29 +86,21 @@ local function draw_roll()
     screen.rect(hx, hy + p - 4, 4, 4, WHITE)
     screen.rect(hx + p - 4, hy + p - 4, 4, 4, WHITE)
   end
-
-  screen.text("点数 " .. value, 96, 202, TEXT)
-  screen.text("单击掷骰 双击统计", 56, 222, TEXT_DIM)
 end
 
+-- 底部柱状图：6 根柱子从左到右 = 点数 1~6。
+-- 每根柱子上方一个「点数:次数」标签（如 "3:5"），柱高表达频次，最高频金色。
 local function draw_stats()
-  local bgs = { 0x23324F, 0x1F2C46, 0x1B263D, 0x172134, 0x131C2B, 0x0F1722 }
-  for i = 1, 6 do
-    screen.rect(0, (i - 1) * 40, W, 40, bgs[i])
-  end
-  screen.text("本次统计", 88, 10, TITLE)
-  screen.text("共掷 " .. total .. " 次", 88, 30, TEXT)
-
   local max_f = 1
   for i = 1, 6 do
     if counts[i] > max_f then max_f = counts[i] end
   end
 
   local bar_w   = 26
-  local bar_gap = 34
-  local bar_x0  = 22
-  local base_y  = 180
-  local max_h   = 120
+  local bar_gap = 32
+  local bar_x0  = 20
+  local base_y  = 216
+  local max_h   = 36
 
   screen.rect(bar_x0 - 2, base_y, 196, 2, BASELINE)
 
@@ -117,33 +108,31 @@ local function draw_stats()
     local x = bar_x0 + (i - 1) * bar_gap
     local cx = x + math.floor(bar_w / 2)
     local f = counts[i]
+    local label = tostring(i) .. ":" .. tostring(f)
     if f > 0 then
-      local h = math.floor(f * max_h / max_f)
+      local h = math.max(4, math.floor(f * max_h / max_f))
       local y = base_y - h
-      local color = (f == max_f) and BAR_HI or BAR
+      local color = (f == max_f and f > 0) and BAR_HI or BAR
       screen.rect(x, y, bar_w, h, color)
-      screen.text(tostring(f), cx - 4, y - 18, TEXT)
+      screen.text(label, cx - 10, y - 15, TEXT)
     else
-      screen.text("0", cx - 4, base_y - 16, TEXT_DIM)
+      screen.text(label, cx - 10, base_y - 15, TEXT_DIM)
     end
-    screen.text(tostring(i), cx - 4, base_y + 6, TEXT_DIM)
   end
-
-  screen.text("双击回掷骰", 80, 222, TEXT_DIM)
 end
 
 local function draw()
   screen.begin(0x172134)
-  if view == "roll" then
-    draw_roll()
-  else
-    draw_stats()
-  end
+  draw_bg()
+  screen.text("掷骰子", 96, 4, TITLE)
+  screen.text("共掷 " .. total .. " 次", 82, 132, TEXT)
+  draw_dice()
+  draw_stats()
   screen.present()
 end
 
 local function do_roll()
-  view = "roll"
+  if state == "rolling" then return end
   rng = (total_ms * 2654435761 + clicks * 97 + 1) % 2147483646 + 1
   target = rnd_int(6)
   roll_duration = 700 + rnd_int(500)
@@ -153,15 +142,6 @@ local function do_roll()
   beep(880, 40)
 end
 
-local function toggle_view()
-  if view == "roll" then
-    view = "stats"
-  else
-    view = "roll"
-  end
-  draw()
-end
-
 function on_start()
   value = 1
   draw()
@@ -169,14 +149,6 @@ end
 
 function on_tick(dt_ms)
   total_ms = total_ms + dt_ms
-
-  if click_pending then
-    click_ms = click_ms + dt_ms
-    if click_ms >= DOUBLE_MS then
-      click_pending = false
-      do_roll()
-    end
-  end
 
   if state == "rolling" then
     elapsed = elapsed + dt_ms
@@ -200,15 +172,8 @@ end
 
 function on_button_click(button_id)
   if button_id ~= "function" then return end
-  if state == "rolling" then return end
-
-  if click_pending then
-    click_pending = false
-    toggle_view()
-  else
-    click_pending = true
-    click_ms = 0
-  end
+  do_roll()
+  draw()
 end
 
 function on_exit()
